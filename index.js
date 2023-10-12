@@ -1,11 +1,118 @@
+const pulumi = require("@pulumi/pulumi");
+const aws = require("@pulumi/aws");
 
-import * as pulumi from "@pulumi/pulumi";
-import * as aws from "@pulumi/aws";
+const awsAccessKey = new pulumi.Config("aws").require("accessKey");
 
-const main = new aws.ec2.Vpc("firstvpc", {
-    cidrBlock: "10.0.0.0/16",
-    instanceTenancy: "default",
-    tags: {
-        Name: "firstvpc",
-    },
+const awsSecretKey = new pulumi.Config("aws").require("secretKey");
+
+const awsRegion = new pulumi.Config("aws").require("region");
+
+const awsVpcCidr = new pulumi.Config("vpc").require("cidrBlock");
+
+const awsDevProvider = new aws.Provider("awsdev", {
+  accessKey: awsAccessKey,
+  secretKey: awsSecretKey,
+  region: awsRegion,
 });
+
+const vpc = new aws.ec2.Vpc("FirstVPC", {
+  cidrBlock: awsVpcCidr,
+  enableDnsSupport: true,
+  enableDnsHostnames: true,
+  tags: {
+    Name: "FirstVPC",
+  },
+});
+
+const gateway = new aws.ec2.InternetGateway("gateway", {
+  vpcId: vpc.id,
+  tags: {
+    Name: "main-gateway",
+  },
+});
+
+const availableZones = aws.getAvailabilityZones({ state: "available" });
+
+const desiredAzCount = 3; // You can change this to 2 or 3 as needed
+
+const azs = availableZones.then((zones) =>
+  zones.names.slice(0, desiredAzCount)
+);
+
+if (desiredAzCount >= 2 && desiredAzCount <= 3) {
+  const publicSubnets = azs.then((azNames) =>
+    azNames.map((az, i) => {
+      return new aws.ec2.Subnet(`public-subnet-${i + 1}`, {
+        vpcId: vpc.id,
+        cidrBlock: `10.0.${i + 1}.0/24`,
+        mapPublicIpOnLaunch: true,
+        availabilityZone: az,
+        tags: {
+          Name: `public-subnet-${i + 1}`,
+        },
+      });
+    })
+  );
+
+  const privateSubnets = azs.then((azNames) =>
+    azNames.map((az, i) => {
+      return new aws.ec2.Subnet(`private-subnet-${i + 1}`, {
+        vpcId: vpc.id,
+        cidrBlock: `10.0.${i + 6 + 1}.0/24`,
+        mapPublicIpOnLaunch: false,
+        availabilityZone: az,
+        tags: {
+          Name: `private-subnet-${i + 1}`,
+        },
+      });
+    })
+  );
+
+  const publicRouteTable = new aws.ec2.RouteTable("public-route-table", {
+    vpcId: vpc.id,
+    tags: {
+      Name: "Public Route Table",
+    },
+  });
+
+  const privateRouteTable = new aws.ec2.RouteTable("private-route-table", {
+    vpcId: vpc.id,
+    tags: {
+      Name: "Private Route Table",
+    },
+  });
+
+  pulumi
+    .all([publicSubnets, privateSubnets])
+    .apply(([publicSubnets, privateSubnets]) => {
+      publicSubnets.forEach((subnet, i) => {
+        new aws.ec2.RouteTableAssociation(
+          `public-route-table-association-${i}`,
+          {
+            routeTableId: publicRouteTable.id,
+            subnetId: subnet.id,
+          }
+        );
+      });
+
+      privateSubnets.forEach((subnet, i) => {
+        new aws.ec2.RouteTableAssociation(
+          `private-route-table-association-${i}`,
+          {
+            routeTableId: privateRouteTable.id,
+            subnetId: subnet.id,
+          }
+        );
+      });
+
+      new aws.ec2.Route("route", {
+        routeTableId: publicRouteTable.id,
+        destinationCidrBlock: "0.0.0.0/0",
+        gatewayId: gateway.id,
+      });
+    });
+} else {
+  throw new Error("Desired number of availability zones must be 2 or 3");
+}
+
+pulumi.output("vpc_id", vpc.id);
