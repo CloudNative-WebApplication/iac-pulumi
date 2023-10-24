@@ -132,6 +132,14 @@ const appSecurityGroup = new aws.ec2.SecurityGroup("appSecurityGroup", {
   },
 });
 
+const databaseSecurityGroup =  new aws.ec2.SecurityGroup("databaseSecurityGroup", {
+  vpcId: vpc.id,
+  description: "Database Security Group",
+  tags: {
+    Name: "Database Security Group",
+  },
+});
+
 // Add Ingress Rules (customize as needed)
 new aws.ec2.SecurityGroupRule("sshIngress", {
   type: "ingress",
@@ -140,6 +148,26 @@ new aws.ec2.SecurityGroupRule("sshIngress", {
   fromPort: 22,
   toPort: 22,
   cidrBlocks: ["0.0.0.0/0"],
+});
+
+new aws.ec2.SecurityGroupRule("dbIngress", {
+  type: "ingress",
+  securityGroupId: databaseSecurityGroup.id,
+  protocol: "tcp",
+  fromPort: 3306,
+  toPort: 3306,
+  sourceSecurityGroupId: appSecurityGroup.id,
+});
+
+const databaseParameterGroup = new aws.rds.ParameterGroup("datbaseparametergroup", {
+  family: "mysql5.7", 
+  description: "Custom Parameter Group for MariaDB",
+  parameters: [
+      {
+          name: "max_connections",
+          value: "100",
+      },
+  ],
 });
 
 new aws.ec2.SecurityGroupRule("httpIngress", {
@@ -188,4 +216,29 @@ const ec2Instance = new aws.ec2.Instance("webAppInstance", {
   },
   disableApiTermination: false,
 });  
+
+// Output the IDs of private subnets
+const privateSubnetIds = privateSubnets.apply(subnets => subnets.map(subnet => subnet.id));
+
+const dbSubnetGroup = new aws.rds.SubnetGroup("mydbsubnetgroup", {
+  subnetIds: privateSubnetIds, // Replace with your private subnet IDs
+  // Other subnet group settings
+});
+
+const rdsInstance = new aws.rds.Instance("rdsinstance", {
+  allocatedStorage: 20, // Adjust the storage size as needed
+  storageType: "gp2", 
+  engine: "mysql", 
+  engineVersion: "5.7", 
+  instanceClass: "db.t2.micro", 
+  multiAz: false,
+  name: "csye6225",
+  username: "csye6225",
+  password: "rdspassword",
+  parameterGroupName: databaseParameterGroup.name, 
+  vpcSecurityGroupIds: [databaseSecurityGroup.id], 
+  dbSubnetGroupName: dbSubnetGroup.name, 
+  skipFinalSnapshot: true, 
+  publiclyAccessible: false, 
+}); 
 
