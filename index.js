@@ -192,8 +192,8 @@ new aws.ec2.SecurityGroupRule("appPortIngress", {
   type: "ingress",
   securityGroupId: appSecurityGroup.id,
   protocol: "tcp",
-  fromPort: 6969,  
-  toPort: 6969,    
+  fromPort: 8080,  
+  toPort: 8080,    
   cidrBlocks: ["0.0.0.0/0"],
 });
 
