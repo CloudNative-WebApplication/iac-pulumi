@@ -132,15 +132,58 @@ const appSecurityGroup = new aws.ec2.SecurityGroup("appSecurityGroup", {
   },
 });
 
-const databaseSecurityGroup =  new aws.ec2.SecurityGroup("databaseSecurityGroup", {
+const dbSecurityGroup = new aws.ec2.SecurityGroup("dbSecurityGroup",{
   vpcId: vpc.id,
   description: "Database Security Group",
   tags: {
     Name: "Database Security Group",
   },
+})
+
+const dbParameterGroup = new aws.rds.ParameterGroup("dbparametergroup", {
+  family: "mariadb10.5", 
+  description: "Custom Parameter Group for MariaDB",
+  parameters: [
+      {
+          name: "max_connections",
+          value: "100",
+      },
+      // Add more parameters as needed
+  ],
 });
 
-// Add Ingress Rules (customize as needed)
+
+
+new aws.ec2.SecurityGroupRule("dbIngress", {
+  type: "ingress",
+  securityGroupId: dbSecurityGroup.id,
+  protocol: "tcp",
+  fromPort: 3306,
+  toPort: 3306,
+  sourceSecurityGroupId: appSecurityGroup.id,
+});
+
+new aws.ec2.SecurityGroupRule("outboundToDB", {
+  type: "egress",
+  securityGroupId: appSecurityGroup.id,
+  protocol: "tcp",
+  fromPort: 3306,
+  toPort: 3306,
+  sourceSecurityGroupId: dbSecurityGroup.id,
+});
+
+
+// Output the IDs of private subnets
+const privateSubnetIds = privateSubnets.apply(subnets => subnets.map(subnet => subnet.id));
+
+const dbSubnetGroup = new aws.rds.SubnetGroup("mydbsubnetgroup", {
+  subnetIds: [
+    privateSubnets[0].id, // Subnet in one AZ
+    privateSubnets[1].id, // Subnet in another AZ
+  ],
+});
+
+
 new aws.ec2.SecurityGroupRule("sshIngress", {
   type: "ingress",
   securityGroupId: appSecurityGroup.id,
@@ -150,25 +193,6 @@ new aws.ec2.SecurityGroupRule("sshIngress", {
   cidrBlocks: ["0.0.0.0/0"],
 });
 
-new aws.ec2.SecurityGroupRule("dbIngress", {
-  type: "ingress",
-  securityGroupId: databaseSecurityGroup.id,
-  protocol: "tcp",
-  fromPort: 3306,
-  toPort: 3306,
-  sourceSecurityGroupId: appSecurityGroup.id,
-});
-
-const databaseParameterGroup = new aws.rds.ParameterGroup("datbaseparametergroup", {
-  family: "mysql5.7", 
-  description: "Custom Parameter Group for MariaDB",
-  parameters: [
-      {
-          name: "max_connections",
-          value: "100",
-      },
-  ],
-});
 
 new aws.ec2.SecurityGroupRule("httpIngress", {
   type: "ingress",
@@ -192,10 +216,39 @@ new aws.ec2.SecurityGroupRule("appPortIngress", {
   type: "ingress",
   securityGroupId: appSecurityGroup.id,
   protocol: "tcp",
-  fromPort: 8080,  
-  toPort: 8080,    
+  fromPort: 6969,  
+  toPort: 6969,    
   cidrBlocks: ["0.0.0.0/0"],
 });
+
+
+
+
+const rdsInstance = new aws.rds.Instance("myrdsinstance", {
+  allocatedStorage: 20, 
+  storageType: "gp2", 
+  engine: "mariadb", 
+  engineVersion: "10.5", 
+  instanceClass: "db.t2.micro", 
+  multiAz: false,
+  name: "csye6225",
+  username: "csye6225",
+  password: "masterpassword",
+  parameterGroupName: dbParameterGroup.name, 
+  vpcSecurityGroupIds: [dbSecurityGroup.id], 
+  dbSubnetGroupName: dbSubnetGroup.name, 
+  skipFinalSnapshot: true, 
+  publiclyAccessible: false, 
+});
+
+rds_endpoint = rdsInstance.endpoint
+rdwoport = rds_endpoint.apply(endpoint => {
+  const parts = endpoint.split(':');
+  return `${parts[0]}:${parts[1]}`;
+});
+db_name = rdsInstance.name
+db_username= rdsInstance.username
+db_password= rdsInstance.password
 
 
 // EC2 Instance (customize instance details)
@@ -206,6 +259,12 @@ const ec2Instance = new aws.ec2.Instance("webAppInstance", {
   keyName: keyName,
   subnetId: publicSubnets[0].id, 
   associatePublicIpAddress: true,
+  userData: pulumi.all([db_username, db_password, db_name, rdwoport]).apply(([user, pass, name, endpoint]) => `#!/bin/bash
+  echo "DB_USER=${user}" >> /opt/csye6225/.env
+  echo "DB_PASSWORD=${pass}" >> /opt/csye6225/.env
+  echo "DB_NAME=${name}" >> /opt/csye6225/.env
+  echo "DB_ENDPOINT=${endpoint}" >> /opt/csye6225/.env
+`),
   rootBlockDevice: {
     volumeSize: 25,
     volumeType: "gp2",
@@ -215,30 +274,4 @@ const ec2Instance = new aws.ec2.Instance("webAppInstance", {
     Name: "Webapp instance",
   },
   disableApiTermination: false,
-});  
-
-// Output the IDs of private subnets
-const privateSubnetIds = privateSubnets.apply(subnets => subnets.map(subnet => subnet.id));
-
-const dbSubnetGroup = new aws.rds.SubnetGroup("mydbsubnetgroup", {
-  subnetIds: privateSubnetIds, // Replace with your private subnet IDs
-  // Other subnet group settings
 });
-
-const rdsInstance = new aws.rds.Instance("rdsinstance", {
-  allocatedStorage: 20, // Adjust the storage size as needed
-  storageType: "gp2", 
-  engine: "mysql", 
-  engineVersion: "5.7", 
-  instanceClass: "db.t2.micro", 
-  multiAz: false,
-  name: "csye6225",
-  username: "csye6225",
-  password: "rdspassword",
-  parameterGroupName: databaseParameterGroup.name, 
-  vpcSecurityGroupIds: [databaseSecurityGroup.id], 
-  dbSubnetGroupName: dbSubnetGroup.name, 
-  skipFinalSnapshot: true, 
-  publiclyAccessible: false, 
-}); 
-
