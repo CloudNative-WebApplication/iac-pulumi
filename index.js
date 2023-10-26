@@ -216,8 +216,8 @@ new aws.ec2.SecurityGroupRule("appPortIngress", {
   type: "ingress",
   securityGroupId: appSecurityGroup.id,
   protocol: "tcp",
-  fromPort: 6969,  
-  toPort: 6969,    
+  fromPort: 8080,  
+  toPort: 8080,    
   cidrBlocks: ["0.0.0.0/0"],
 });
 
@@ -250,7 +250,6 @@ db_name = rdsInstance.name
 db_username= rdsInstance.username
 db_password= rdsInstance.password
 
-
 // EC2 Instance (customize instance details)
 const ec2Instance = new aws.ec2.Instance("webAppInstance", {
   ami: amiId,
@@ -260,7 +259,7 @@ const ec2Instance = new aws.ec2.Instance("webAppInstance", {
   subnetId: publicSubnets[0].id, 
   associatePublicIpAddress: true,
   userData: pulumi.all([db_username, db_password, db_name, rdwoport]).apply(([user, pass, name, endpoint]) => `#!/bin/bash
-  echo "DB_USER=${user}" >> /opt/csye6225/.env
+  echo "DB_USER=${user}" > /opt/csye6225/.env
   echo "DB_PASSWORD=${pass}" >> /opt/csye6225/.env
   echo "DB_NAME=${name}" >> /opt/csye6225/.env
   echo "DB_ENDPOINT=${endpoint}" >> /opt/csye6225/.env
