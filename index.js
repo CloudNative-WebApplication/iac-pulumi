@@ -5,10 +5,21 @@ const aws = require("@pulumi/aws");
 const awsProfile = new pulumi.Config("aws").require("profile");
 const awsRegion = new pulumi.Config("aws").require("region");
 const awsVpcCidr = new pulumi.Config("vpc").require("cidrBlock");
+const domaniname = new pulumi.Config().require("domainname"); 
 const keyName = new pulumi.Config().require("keynamepair"); 
-const config = new pulumi.Config();
-const amiId = config.require("ami_id");
 
+ 
+// Function to get the most recent AMI
+function getMostRecentAmi() {
+  // Adjust the filters to match the AMIs you're interested in
+  return aws.ec2.getAmi({
+    filters: [{
+      name: "name",
+      values: ["CSYE6225_2023*"], 
+    }],
+    mostRecent: true
+  });
+}
 
 // Using AWS Profile
 const awsDevProvider = new aws.Provider("awsdev", {
@@ -148,7 +159,6 @@ const dbParameterGroup = new aws.rds.ParameterGroup("dbparametergroup", {
           name: "max_connections",
           value: "100",
       },
-      // Add more parameters as needed
   ],
 });
 
@@ -171,7 +181,14 @@ new aws.ec2.SecurityGroupRule("outboundToDB", {
   toPort: 3306,
   sourceSecurityGroupId: dbSecurityGroup.id,
 });
-
+new aws.ec2.SecurityGroupRule("outboundToInternet", {
+  type: "egress",
+  securityGroupId: appSecurityGroup.id,
+  protocol: "tcp",
+  fromPort: 443,
+  toPort: 443,
+  cidrBlocks: ["0.0.0.0/0"],
+});
 
 // Output the IDs of private subnets
 const privateSubnetIds = privateSubnets.apply(subnets => subnets.map(subnet => subnet.id));
@@ -244,25 +261,64 @@ const rdsInstance = new aws.rds.Instance("myrdsinstance", {
 rds_endpoint = rdsInstance.endpoint
 rdwoport = rds_endpoint.apply(endpoint => {
   const parts = endpoint.split(':');
-  return `${parts[0]}:${parts[1]}`;
+  const modifiedEndpoint = `${parts[0]}:${parts[1]}`;
+  return modifiedEndpoint.slice(0, -5); 
 });
 db_name = rdsInstance.name
 db_username= rdsInstance.username
 db_password= rdsInstance.password
 
+const ami = pulumi.output(getMostRecentAmi());
+
+// Define an IAM role with CloudWatchAgentServerPolicy policy
+const role = new aws.iam.Role("cloudwatch-agent-role", {
+  assumeRolePolicy: JSON.stringify({
+      Version: "2012-10-17",
+      Statement: [{
+          Action: "sts:AssumeRole",
+          Effect: "Allow",
+          Principal: {
+              Service: "ec2.amazonaws.com",
+          },
+      }],
+  }),
+});
+
+
+const policyAttachment = new aws.iam.RolePolicyAttachment("cloudwatch-agent-policy-attachment", {
+  role: role,
+  policyArn: "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
+});
+
+// Create an Instance Profile for the EC2 instance
+const instanceProfile = new aws.iam.InstanceProfile("cloudwatch-agent-instance-profile", {
+  role: role,
+});
+
+
 // EC2 Instance (customize instance details)
 const ec2Instance = new aws.ec2.Instance("webAppInstance", {
-  ami: amiId,
+  ami: ami.id,
   instanceType: "t2.micro",
+  iamInstanceProfile: instanceProfile,
   vpcSecurityGroupIds: [appSecurityGroup.id],
   keyName: keyName,
   subnetId: publicSubnets[0].id, 
   associatePublicIpAddress: true,
   userData: pulumi.all([db_username, db_password, db_name, rdwoport]).apply(([user, pass, name, endpoint]) => `#!/bin/bash
-  echo "DB_USER=${user}" > /opt/csye6225/.env
+  echo "DB_USERNAME=${user}" > /opt/csye6225/.env
   echo "DB_PASSWORD=${pass}" >> /opt/csye6225/.env
   echo "DB_NAME=${name}" >> /opt/csye6225/.env
-  echo "DB_ENDPOINT=${endpoint}" >> /opt/csye6225/.env
+  echo "DB_HOST=${endpoint}" >> /opt/csye6225/.env
+  echo "DATABASE_URL=mysql://${user}:${pass}@${endpoint}" >> /opt/csye6225/.env
+
+  sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+    -a fetch-config \
+    -m ec2 \
+    -c file:/opt/csye6225/cloudwatchConfig.json \
+    -s
+    systemctl enable amazon-cloudwatch-agent
+    systemctl start amazon-cloudwatch-agent
 `),
   rootBlockDevice: {
     volumeSize: 25,
@@ -274,3 +330,16 @@ const ec2Instance = new aws.ec2.Instance("webAppInstance", {
   },
   disableApiTermination: false,
 });
+const zone = pulumi.output(aws.route53.getZone({ name: domaniname, privateZone: false }, { provider: awsDevProvider }));
+
+
+const aRecord = new aws.route53.Record("a-record", {
+  zoneId: zone.id,
+  name: domaniname, 
+  type: "A",
+  ttl: 300,
+  records: [ec2Instance.publicIp], 
+}, { provider: awsDevProvider });
+
+exports.ec2InstanceDnsName = ec2Instance.publicDns;
+exports.route53RecordName = aRecord.name;
