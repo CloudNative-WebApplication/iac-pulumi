@@ -11,7 +11,6 @@ const keyName = new pulumi.Config().require("keynamepair");
  
 // Function to get the most recent AMI
 function getMostRecentAmi() {
-  // Adjust the filters to match the AMIs you're interested in
   return aws.ec2.getAmi({
     filters: [{
       name: "name",
@@ -72,6 +71,10 @@ const privateSubnets = azs.apply((azNames) =>
       },
     });
   })
+);
+
+const publicSubnetIds = pulumi.all(publicSubnets).apply(subnets =>
+  subnets.map(subnet => subnet.id)
 );
 
 
@@ -151,6 +154,42 @@ const dbSecurityGroup = new aws.ec2.SecurityGroup("dbSecurityGroup",{
   },
 })
 
+const loadbalancerSecurityGroup = new aws.ec2.SecurityGroup("LoadBalancerSecurityGroup",{
+  vpcId: vpc.id,
+  description: "LoadBalancerSecurityGroup",
+  tags: {
+    Name: "LoadBalancerSecurityGroup",
+  },
+})
+
+new aws.ec2.SecurityGroupRule("lbIngressHttp", {
+  type: "ingress",
+  securityGroupId: loadbalancerSecurityGroup.id,
+  protocol: "tcp",
+  fromPort: 80,
+  toPort: 80,
+  cidrBlocks: ["0.0.0.0/0"],
+});
+
+new aws.ec2.SecurityGroupRule("lbIngressHttps", {
+  type: "ingress",
+  securityGroupId: loadbalancerSecurityGroup.id,
+  protocol: "tcp",
+  fromPort: 443,
+  toPort: 443,
+  cidrBlocks: ["0.0.0.0/0"],
+});
+
+new aws.ec2.SecurityGroupRule("lbEgressAllTraffic", {
+  type: "egress", 
+  securityGroupId: loadbalancerSecurityGroup.id,
+  protocol: "-1", 
+  fromPort: 0,    
+  toPort: 0,
+  cidrBlocks: ["0.0.0.0/0"], 
+});
+
+
 const dbParameterGroup = new aws.rds.ParameterGroup("dbparametergroup", {
   family: "mariadb10.5", 
   description: "Custom Parameter Group for MariaDB",
@@ -210,24 +249,6 @@ new aws.ec2.SecurityGroupRule("sshIngress", {
   cidrBlocks: ["0.0.0.0/0"],
 });
 
-
-new aws.ec2.SecurityGroupRule("httpIngress", {
-  type: "ingress",
-  securityGroupId: appSecurityGroup.id,
-  protocol: "tcp",
-  fromPort: 80,
-  toPort: 80,
-  cidrBlocks: ["0.0.0.0/0"],
-});
-
-new aws.ec2.SecurityGroupRule("httpsIngress", {
-  type: "ingress",
-  securityGroupId: appSecurityGroup.id,
-  protocol: "tcp",
-  fromPort: 443,
-  toPort: 443,
-  cidrBlocks: ["0.0.0.0/0"],
-});
 
 new aws.ec2.SecurityGroupRule("appPortIngress", {
   type: "ingress",
@@ -308,7 +329,7 @@ const webappLoadBalancer = new aws.lb.LoadBalancer("webappLoadBalancer", {
 
 // Target Group
 const targetGroup = new aws.lb.TargetGroup("targetGroup", {
-  port: 6969, 
+  port: 8080, 
   protocol: "HTTP",
   vpcId: vpc.id,
   targetType: "instance",
@@ -316,7 +337,7 @@ const targetGroup = new aws.lb.TargetGroup("targetGroup", {
     enabled: true,
     path: "/healthz", 
     protocol: "HTTP",
-    port:"6969",
+    port:"8080",
     interval: 30,
     timeout: 5,
     healthyThreshold: 2,
@@ -448,12 +469,12 @@ const cpuLowAlarm = new aws.cloudwatch.MetricAlarm("cpuLowAlarm", {
   },
 });
 
-const zone = pulumi.output(aws.route53.getZone({ name: domainName, privateZone: false }, { provider: awsDevProvider }));
+const zone = pulumi.output(aws.route53.getZone({ name: domaniname, privateZone: false }, { provider: awsDevProvider }));
 
 
 const DNSrecord = new aws.route53.Record("DNSrecord", {
   zoneId: zone.id,
-  name: domainName  , 
+  name: domaniname  , 
   type: "A", 
   aliases: [{
       name: webappLoadBalancer.dnsName,
