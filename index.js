@@ -295,51 +295,173 @@ const instanceProfile = new aws.iam.InstanceProfile("cloudwatch-agent-instance-p
   role: role,
 });
 
-
-// EC2 Instance (customize instance details)
-const ec2Instance = new aws.ec2.Instance("webAppInstance", {
-  ami: ami.id,
-  instanceType: "t2.micro",
-  iamInstanceProfile: instanceProfile,
-  vpcSecurityGroupIds: [appSecurityGroup.id],
-  keyName: keyName,
-  subnetId: publicSubnets[0].id, 
-  associatePublicIpAddress: true,
-  userData: pulumi.all([db_username, db_password, db_name, rdwoport]).apply(([user, pass, name, endpoint]) => `#!/bin/bash
-  echo "DB_USERNAME=${user}" > /opt/csye6225/.env
-  echo "DB_PASSWORD=${pass}" >> /opt/csye6225/.env
-  echo "DB_NAME=${name}" >> /opt/csye6225/.env
-  echo "DB_HOST=${endpoint}" >> /opt/csye6225/.env
-  echo "DATABASE_URL=mysql://${user}:${pass}@${endpoint}" >> /opt/csye6225/.env
-
-  sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
-    -a fetch-config \
-    -m ec2 \
-    -c file:/opt/csye6225/cloudwatchConfig.json \
-    -s
-    systemctl enable amazon-cloudwatch-agent
-    systemctl start amazon-cloudwatch-agent
-`),
-  rootBlockDevice: {
-    volumeSize: 25,
-    volumeType: "gp2",
-    deleteOnTermination: true,
+const webappLoadBalancer = new aws.lb.LoadBalancer("webappLoadBalancer", {
+  internal: false,
+  loadBalancerType: "application",
+  securityGroups: [loadbalancerSecurityGroup.id],
+  subnets: publicSubnetIds,
+  enableDeletionProtection: false,
+  tags: {
+      Name: "MywebappLoadBalancer",
   },
+}, { provider: awsDevProvider });
+
+// Target Group
+const targetGroup = new aws.lb.TargetGroup("targetGroup", {
+  port: 6969, 
+  protocol: "HTTP",
+  vpcId: vpc.id,
+  targetType: "instance",
+  healthCheck: {
+    enabled: true,
+    path: "/healthz", 
+    protocol: "HTTP",
+    port:"6969",
+    interval: 30,
+    timeout: 5,
+    healthyThreshold: 2,
+    unhealthyThreshold: 2,
+  },
+}, { provider: awsDevProvider });
+
+// Listener
+const listener = new aws.lb.Listener("listener", {
+  loadBalancerArn: webappLoadBalancer.arn,
+  port: 80,
+  protocol: "HTTP",
+  defaultActions: [{
+      type: "forward",
+      targetGroupArn: targetGroup.arn,
+  }],
+}, { provider: awsDevProvider });
+
+
+
+const launchTemplate = new aws.ec2.LaunchTemplate("launchTemplate", {
+  imageId: ami.id,
+  instanceType: "t2.micro",
+  keyName: keyName,
+  networkInterfaces: [{
+    associatePublicIpAddress: true,
+    securityGroups: [appSecurityGroup.id],
+  }],
+  userData: pulumi.all([db_username, db_password, db_name, rdwoport])
+  .apply(([user, pass, name, endpoint]) => {
+    const userData = `#!/bin/bash
+
+echo "DB_USERNAME=${user}" > /opt/csye6225/.env
+echo "DB_PASSWORD=${pass}" >> /opt/csye6225/.env
+echo "DB_NAME=${name}" >> /opt/csye6225/.env
+echo "DB_HOST=${endpoint}" >> /opt/csye6225/.env
+echo "DATABASE_URL=mysql://${user}:${pass}@${endpoint}" >> /opt/csye6225/.env
+
+
+sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/csye6225/cloud-watchconfig.json -s
+
+
+
+
+`;
+    return Buffer.from(userData).toString('base64');
+  }),
+
+  iamInstanceProfile: {
+    name: instanceProfile.name,
+  },
+  blockDeviceMappings: [{
+    deviceName: "/dev/xvda",
+    ebs: {
+      volumeSize: 25,
+      volumeType: "gp2",
+      deleteOnTermination: true,
+    },
+  }],
   tags: {
     Name: "Webapp instance",
   },
-  disableApiTermination: false,
-});
-const zone = pulumi.output(aws.route53.getZone({ name: domaniname, privateZone: false }, { provider: awsDevProvider }));
-
-
-const aRecord = new aws.route53.Record("a-record", {
-  zoneId: zone.id,
-  name: domaniname, 
-  type: "A",
-  ttl: 300,
-  records: [ec2Instance.publicIp], 
 }, { provider: awsDevProvider });
 
-exports.ec2InstanceDnsName = ec2Instance.publicDns;
-exports.route53RecordName = aRecord.name;
+
+
+// Auto Scaling Group
+const autoScalingGroup = new aws.autoscaling.Group("autoScalingGroup", {
+  minSize: 1,
+  maxSize: 3,
+  desiredCapacity: 1,
+  launchTemplate: {
+      id: launchTemplate.id,
+      version: "$Latest",
+  },
+  vpcZoneIdentifiers: publicSubnetIds,
+  targetGroupArns: [targetGroup.arn],
+  cooldown: 60,
+  tags: [{
+      key: "Name",
+      value: "MyWebAppInstance",
+      propagateAtLaunch: true,
+  }],
+  healthCheckType: "EC2",
+  healthCheckGracePeriod: 600,
+}, { provider: awsDevProvider });
+
+// Auto Scaling Policies
+const scalingupPolicy = new aws.autoscaling.Policy("scalingupPolicy", {
+  scalingAdjustment: 1,
+  adjustmentType: "ChangeInCapacity",
+  autoscalingGroupName: autoScalingGroup.name,
+  cooldown: 120,
+});
+
+const scalingdownPolicy = new aws.autoscaling.Policy("scalingdownPolicy", {
+  scalingAdjustment: -1,
+  adjustmentType: "ChangeInCapacity",
+  autoscalingGroupName: autoScalingGroup.name,
+  cooldown: 120,
+});
+
+
+const cpuHighAlarm = new aws.cloudwatch.MetricAlarm("cpuHighAlarm", {
+  metricName: "CPUUtilization",
+  namespace: "AWS/EC2",
+  statistic: "Average",
+  period: 60,
+  evaluationPeriods: 2,
+  threshold: 5,
+  comparisonOperator: "GreaterThanThreshold",
+  alarmActions: [scalingupPolicy.arn],
+  dimensions: {
+      AutoScalingGroupName: autoScalingGroup.name,
+  },
+});
+
+const cpuLowAlarm = new aws.cloudwatch.MetricAlarm("cpuLowAlarm", {
+  metricName: "CPUUtilization",
+  namespace: "AWS/EC2",
+  statistic: "Average",
+  period: 60,
+  evaluationPeriods: 2,
+  threshold: 3,
+  comparisonOperator: "LessThanThreshold",
+  alarmActions: [scalingdownPolicy.arn],
+  dimensions: {
+      AutoScalingGroupName: autoScalingGroup.name,
+  },
+});
+
+const zone = pulumi.output(aws.route53.getZone({ name: domainName, privateZone: false }, { provider: awsDevProvider }));
+
+
+const DNSrecord = new aws.route53.Record("DNSrecord", {
+  zoneId: zone.id,
+  name: domainName  , 
+  type: "A", 
+  aliases: [{
+      name: webappLoadBalancer.dnsName,
+      zoneId: webappLoadBalancer.zoneId, 
+      evaluateTargetHealth: true, 
+  }],
+}, { provider: awsDevProvider });
+
+exports.loadBalancerDNSName = DNSrecord.name;
+exports.loadBalancerSecurityGroupId = loadbalancerSecurityGroup.id; 
+

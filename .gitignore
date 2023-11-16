@@ -1,2 +1,4 @@
 /node_modules/
 Pulumi.*.yaml
+
+.DS_Store
