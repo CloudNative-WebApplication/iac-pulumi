@@ -2,15 +2,15 @@ const pulumi = require("@pulumi/pulumi");
 const aws = require("@pulumi/aws");
 
 // AWS Configurations
-const awsProfile = new pulumi.Config("aws").require("profile");
-const awsRegion = new pulumi.Config("aws").require("region");
-const awsVpcCidr = new pulumi.Config("vpc").require("cidrBlock");
-const domaniname = new pulumi.Config().require("domainname"); 
-const keyName = new pulumi.Config().require("keynamepair"); 
+const ConfigAwsProfile = new pulumi.Config("aws").require("profile");
+const ConfigAwsRegion = new pulumi.Config("aws").require("region");
+const ConfigVpcCidr = new pulumi.Config("vpc").require("cidrBlock");
+const ConfigDomaniname = new pulumi.Config().require("domainname"); 
+const ConfigkeyName = new pulumi.Config().require("ConfigkeyNamepair"); 
 
  
 // Function to get the most recent AMI
-function getMostRecentAmi() {
+function getLatestAmi() {
   return aws.ec2.getAmi({
     filters: [{
       name: "name",
@@ -21,18 +21,18 @@ function getMostRecentAmi() {
 }
 
 // Using AWS Profile
-const awsDevProvider = new aws.Provider("awsdev", {
-  profile: awsProfile,
-  region: awsRegion,
+const awsProviderDev = new aws.Provider("awsdev", {
+  profile: ConfigAwsProfile,
+  region: ConfigAwsRegion,
 });
 
-// VPC
-const vpc = new aws.ec2.Vpc("myVpc", {
-  cidrBlock: awsVpcCidr,
+// Virtual Private Cloud
+const vpc = new aws.ec2.Vpc("CustomVPC", {
+  cidrBlock: ConfigVpcCidr,
   enableDnsSupport: true,
   enableDnsHostnames: true,
   tags: {
-    Name: "MyVPC",
+    Name: "CustomVPC",
   },
 });
 
@@ -94,7 +94,7 @@ const publicRouteTable = new aws.ec2.RouteTable("public-route-table", {
   },
 });
 
-const publicSubnetAssociations = publicSubnets.apply((subnets) =>
+const publicSubnetAssociationsTables = publicSubnets.apply((subnets) =>
   subnets.map((subnet, i) => {
     return new aws.ec2.RouteTableAssociation(`public-route-table-association-${i}`, {
       routeTableId: publicRouteTable.id,
@@ -154,17 +154,17 @@ const dbSecurityGroup = new aws.ec2.SecurityGroup("dbSecurityGroup",{
   },
 })
 
-const loadbalancerSecurityGroup = new aws.ec2.SecurityGroup("LoadBalancerSecurityGroup",{
+const SecurityGroupLoadBalancer = new aws.ec2.SecurityGroup("SecurityGroupLoadBalancer",{
   vpcId: vpc.id,
-  description: "LoadBalancerSecurityGroup",
+  description: "SecurityGroupLoadBalancer",
   tags: {
-    Name: "LoadBalancerSecurityGroup",
+    Name: "SecurityGroupLoadBalancer",
   },
 })
 
 new aws.ec2.SecurityGroupRule("lbIngressHttp", {
   type: "ingress",
-  securityGroupId: loadbalancerSecurityGroup.id,
+  securityGroupId: SecurityGroupLoadBalancer.id,
   protocol: "tcp",
   fromPort: 80,
   toPort: 80,
@@ -173,7 +173,7 @@ new aws.ec2.SecurityGroupRule("lbIngressHttp", {
 
 new aws.ec2.SecurityGroupRule("lbIngressHttps", {
   type: "ingress",
-  securityGroupId: loadbalancerSecurityGroup.id,
+  securityGroupId: SecurityGroupLoadBalancer.id,
   protocol: "tcp",
   fromPort: 443,
   toPort: 443,
@@ -182,7 +182,7 @@ new aws.ec2.SecurityGroupRule("lbIngressHttps", {
 
 new aws.ec2.SecurityGroupRule("lbEgressAllTraffic", {
   type: "egress", 
-  securityGroupId: loadbalancerSecurityGroup.id,
+  securityGroupId: SecurityGroupLoadBalancer.id,
   protocol: "-1", 
   fromPort: 0,    
   toPort: 0,
@@ -260,9 +260,7 @@ new aws.ec2.SecurityGroupRule("appPortIngress", {
 });
 
 
-
-
-const rdsInstance = new aws.rds.Instance("myrdsinstance", {
+const rdsInstance = new aws.rds.Instance("customrdsinstance", {
   allocatedStorage: 20, 
   storageType: "gp2", 
   engine: "mariadb", 
@@ -271,7 +269,7 @@ const rdsInstance = new aws.rds.Instance("myrdsinstance", {
   multiAz: false,
   name: "csye6225",
   username: "csye6225",
-  password: "masterpassword",
+  password: "strongpassword",
   parameterGroupName: dbParameterGroup.name, 
   vpcSecurityGroupIds: [dbSecurityGroup.id], 
   dbSubnetGroupName: dbSubnetGroup.name, 
@@ -289,7 +287,7 @@ db_name = rdsInstance.name
 db_username= rdsInstance.username
 db_password= rdsInstance.password
 
-const ami = pulumi.output(getMostRecentAmi());
+const ami = pulumi.output(getLatestAmi());
 
 // Define an IAM role with CloudWatchAgentServerPolicy policy
 const role = new aws.iam.Role("cloudwatch-agent-role", {
@@ -319,13 +317,13 @@ const instanceProfile = new aws.iam.InstanceProfile("cloudwatch-agent-instance-p
 const webappLoadBalancer = new aws.lb.LoadBalancer("webappLoadBalancer", {
   internal: false,
   loadBalancerType: "application",
-  securityGroups: [loadbalancerSecurityGroup.id],
+  securityGroups: [SecurityGroupLoadBalancer.id],
   subnets: publicSubnetIds,
   enableDeletionProtection: false,
   tags: {
-      Name: "MywebappLoadBalancer",
+      Name: "WebappLoadBalancer",
   },
-}, { provider: awsDevProvider });
+}, { provider: awsProviderDev });
 
 // Target Group
 const targetGroup = new aws.lb.TargetGroup("targetGroup", {
@@ -343,7 +341,7 @@ const targetGroup = new aws.lb.TargetGroup("targetGroup", {
     healthyThreshold: 2,
     unhealthyThreshold: 2,
   },
-}, { provider: awsDevProvider });
+}, { provider: awsProviderDev });
 
 // Listener
 const listener = new aws.lb.Listener("listener", {
@@ -354,37 +352,31 @@ const listener = new aws.lb.Listener("listener", {
       type: "forward",
       targetGroupArn: targetGroup.arn,
   }],
-}, { provider: awsDevProvider });
+}, { provider: awsProviderDev });
 
+const userData = pulumi.interpolate`#!/bin/bash
 
+echo "DB_USERNAME=${db_username}" > /opt/csye6225/.env
+echo "DB_PASSWORD=${db_password}" >> /opt/csye6225/.env
+echo "DB_NAME=${db_name}" >> /opt/csye6225/.env
+echo "DB_HOST=${rdwoport}" >> /opt/csye6225/.env
+echo "DATABASE_URL=mysql://${db_username}:${db_password}@${rdwoport}" >> /opt/csye6225/.env
+
+sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/csye6225/cloudwatchConfig.json -s
+systemctl restart amazon-cloudwatch-agent
+`;
+
+const base64Script = userData.apply(script => Buffer.from(script).toString('base64'));
 
 const launchTemplate = new aws.ec2.LaunchTemplate("launchTemplate", {
   imageId: ami.id,
   instanceType: "t2.micro",
-  keyName: keyName,
+  keyName: ConfigkeyName,
   networkInterfaces: [{
     associatePublicIpAddress: true,
     securityGroups: [appSecurityGroup.id],
   }],
-  userData: pulumi.all([db_username, db_password, db_name, rdwoport])
-  .apply(([user, pass, name, endpoint]) => {
-    const userData = `#!/bin/bash
-
-echo "DB_USERNAME=${user}" > /opt/csye6225/.env
-echo "DB_PASSWORD=${pass}" >> /opt/csye6225/.env
-echo "DB_NAME=${name}" >> /opt/csye6225/.env
-echo "DB_HOST=${endpoint}" >> /opt/csye6225/.env
-echo "DATABASE_URL=mysql://${user}:${pass}@${endpoint}" >> /opt/csye6225/.env
-
-
-sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/csye6225/cloud-watchconfig.json -s
-
-
-
-
-`;
-    return Buffer.from(userData).toString('base64');
-  }),
+  userData: base64Script,
 
   iamInstanceProfile: {
     name: instanceProfile.name,
@@ -400,7 +392,7 @@ sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-c
   tags: {
     Name: "Webapp instance",
   },
-}, { provider: awsDevProvider });
+}, { provider: awsProviderDev });
 
 
 
@@ -423,7 +415,7 @@ const autoScalingGroup = new aws.autoscaling.Group("autoScalingGroup", {
   }],
   healthCheckType: "EC2",
   healthCheckGracePeriod: 600,
-}, { provider: awsDevProvider });
+}, { provider: awsProviderDev });
 
 // Auto Scaling Policies
 const scalingupPolicy = new aws.autoscaling.Policy("scalingupPolicy", {
@@ -469,20 +461,21 @@ const cpuLowAlarm = new aws.cloudwatch.MetricAlarm("cpuLowAlarm", {
   },
 });
 
-const zone = pulumi.output(aws.route53.getZone({ name: domaniname, privateZone: false }, { provider: awsDevProvider }));
+const zone = pulumi.output(aws.route53.getZone({ name: ConfigDomaniname, privateZone: false }, { provider: awsProviderDev }));
 
 
 const DNSrecord = new aws.route53.Record("DNSrecord", {
   zoneId: zone.id,
-  name: domaniname  , 
+  name: ConfigDomaniname  , 
   type: "A", 
   aliases: [{
       name: webappLoadBalancer.dnsName,
       zoneId: webappLoadBalancer.zoneId, 
       evaluateTargetHealth: true, 
   }],
-}, { provider: awsDevProvider });
+}, { provider: awsProviderDev });
 
 exports.loadBalancerDNSName = DNSrecord.name;
-exports.loadBalancerSecurityGroupId = loadbalancerSecurityGroup.id; 
+exports.SecurityGroupLoadBalancerId = SecurityGroupLoadBalancer.id; 
+
 
