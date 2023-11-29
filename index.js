@@ -1,5 +1,7 @@
 const pulumi = require("@pulumi/pulumi");
 const aws = require("@pulumi/aws");
+const gcp = require("@pulumi/gcp");
+const AWS = require('aws-sdk');
 
 // AWS Configurations
 const ConfigAwsProfile = new pulumi.Config("aws").require("profile");
@@ -7,7 +9,9 @@ const ConfigAwsRegion = new pulumi.Config("aws").require("region");
 const ConfigVpcCidr = new pulumi.Config("vpc").require("cidrBlock");
 const ConfigDomaniname = new pulumi.Config().require("domainname"); 
 const ConfigkeyName = new pulumi.Config().require("ConfigkeyNamepair"); 
-
+const ConfigGcpName = new pulumi.Config("gcp").require("project");
+const ConfigMailDomain = new pulumi.Config().require("ConfigMailDomain");
+const ConfigMailKey = new pulumi.Config().require("ConfigMailKey");
  
 // Function to get the most recent AMI
 function getLatestAmi() {
@@ -79,10 +83,10 @@ const publicSubnetIds = pulumi.all(publicSubnets).apply(subnets =>
 
 
 // Create an Internet Gateway and attach it to the VPC
-const internetGateway = new aws.ec2.InternetGateway("myInternetGateway", {
+const internetGateway = new aws.ec2.InternetGateway("InternetGateway", {
   vpcId: vpc.id,
   tags: {
-    Name: "MyInternetGateway",
+    Name: "InternetGateway",
   },
 });
 
@@ -232,7 +236,7 @@ new aws.ec2.SecurityGroupRule("outboundToInternet", {
 // Output the IDs of private subnets
 const privateSubnetIds = privateSubnets.apply(subnets => subnets.map(subnet => subnet.id));
 
-const dbSubnetGroup = new aws.rds.SubnetGroup("mydbsubnetgroup", {
+const dbSubnetGroup = new aws.rds.SubnetGroup("ownBbsubnetgroup", {
   subnetIds: [
     privateSubnets[0].id, // Subnet in one AZ
     privateSubnets[1].id, // Subnet in another AZ
@@ -259,60 +263,8 @@ new aws.ec2.SecurityGroupRule("appPortIngress", {
   cidrBlocks: ["0.0.0.0/0"],
 });
 
-
-const rdsInstance = new aws.rds.Instance("customrdsinstance", {
-  allocatedStorage: 20, 
-  storageType: "gp2", 
-  engine: "mariadb", 
-  engineVersion: "10.5", 
-  instanceClass: "db.t2.micro", 
-  multiAz: false,
-  name: "csye6225",
-  username: "csye6225",
-  password: "strongpassword",
-  parameterGroupName: dbParameterGroup.name, 
-  vpcSecurityGroupIds: [dbSecurityGroup.id], 
-  dbSubnetGroupName: dbSubnetGroup.name, 
-  skipFinalSnapshot: true, 
-  publiclyAccessible: false, 
-});
-
-rds_endpoint = rdsInstance.endpoint
-rdwoport = rds_endpoint.apply(endpoint => {
-  const parts = endpoint.split(':');
-  const modifiedEndpoint = `${parts[0]}:${parts[1]}`;
-  return modifiedEndpoint.slice(0, -5); 
-});
-db_name = rdsInstance.name
-db_username= rdsInstance.username
-db_password= rdsInstance.password
-
 const ami = pulumi.output(getLatestAmi());
 
-// Define an IAM role with CloudWatchAgentServerPolicy policy
-const role = new aws.iam.Role("cloudwatch-agent-role", {
-  assumeRolePolicy: JSON.stringify({
-      Version: "2012-10-17",
-      Statement: [{
-          Action: "sts:AssumeRole",
-          Effect: "Allow",
-          Principal: {
-              Service: "ec2.amazonaws.com",
-          },
-      }],
-  }),
-});
-
-
-const policyAttachment = new aws.iam.RolePolicyAttachment("cloudwatch-agent-policy-attachment", {
-  role: role,
-  policyArn: "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
-});
-
-// Create an Instance Profile for the EC2 instance
-const instanceProfile = new aws.iam.InstanceProfile("cloudwatch-agent-instance-profile", {
-  role: role,
-});
 
 const webappLoadBalancer = new aws.lb.LoadBalancer("webappLoadBalancer", {
   internal: false,
@@ -354,6 +306,220 @@ const listener = new aws.lb.Listener("listener", {
   }],
 }, { provider: awsProviderDev });
 
+
+
+const rdsInstance = new aws.rds.Instance("customrdsinstance", {
+  allocatedStorage: 20, 
+  storageType: "gp2", 
+  engine: "mariadb", 
+  engineVersion: "10.5", 
+  instanceClass: "db.t2.micro", 
+  multiAz: false,
+  name: "csye6225",
+  username: "csye6225",
+  password: "strongpassword",
+  parameterGroupName: dbParameterGroup.name, 
+  vpcSecurityGroupIds: [dbSecurityGroup.id], 
+  dbSubnetGroupName: dbSubnetGroup.name, 
+  skipFinalSnapshot: true, 
+  publiclyAccessible: false, 
+});
+
+rds_endpoint = rdsInstance.endpoint
+rdwoport = rds_endpoint.apply(endpoint => {
+  const parts = endpoint.split(':');
+  const modifiedEndpoint = `${parts[0]}:${parts[1]}`;
+  return modifiedEndpoint.slice(0, -5); 
+});
+
+const storageBucket = new gcp.storage.Bucket("UploadedAssignmentBucket", {
+  location: "US",
+});
+
+const serviceAccount = new gcp.serviceaccount.Account("GcpServiceAccount", {
+  accountId: "gcp-service-account",
+  displayName: "GCP Service Account",
+});
+
+const serviceAccountKey = new gcp.serviceaccount.Key("GcpServiceAccountKey", {
+  serviceAccountId: serviceAccount.name,
+});
+
+const storageAdminBinding = new gcp.projects.IAMMember("storageBinding-admin", {
+  project: ConfigGcpName ,
+  member: pulumi.interpolate`serviceAccount:${serviceAccount.email}`,
+  role: "roles/storage.objectAdmin",
+});
+
+const dynamoDbTable = new aws.dynamodb.Table("emailTrackingTable", {
+  attributes: [
+      { name: "id", type: "S" },
+  ],
+  hashKey: "id",
+  billingMode: "PAY_PER_REQUEST",
+});
+
+// Create an SNS Topic
+const snsTopic = new aws.sns.Topic("serverlessTopic", {
+  displayName: "Serverless SNS Topic for Lambda Functions",
+}, { provider: awsDevProvider });
+
+exports.topicName = snsTopic.name;
+exports.topicArn = snsTopic.arn;
+
+
+// Read in the Lambda zip file
+const lambdaZipPath = '/Users/sruthisivasankar/Desktop/lambda.zip';
+const lambdaZip = new pulumi.asset.FileArchive(lambdaZipPath);
+
+// IAM Role for Lambda Function
+const lambdaRole = new aws.iam.Role("lambdaRole", {
+  assumeRolePolicy: JSON.stringify({
+    Version: "2012-10-17",
+    Statement: [{
+      Action: "sts:AssumeRole",
+      Effect: "Allow",
+      Principal: {
+        Service: "lambda.amazonaws.com",
+      },
+    }],
+  }),
+});
+
+// Attach necessary policies to the role
+const lambdaPolicyDocument = JSON.stringify({
+  Version: "2012-10-17",
+  Statement: [
+      {
+          Effect: "Allow",
+          Action: [
+              "sns:Publish",
+              "dynamodb:PutItem",
+              "dynamodb:GetItem",
+              "secretsmanager:GetSecretValue",
+              "logs:CreateLogGroup",
+				      "logs:CreateLogStream",
+				      "logs:PutLogEvents"
+          ],
+          Resource: ""  // Specify resources or use "" for all resources
+      }
+  ]
+});
+
+const lambdaPolicy = new aws.iam.RolePolicy("lambdaPolicy", {
+  role: lambdaRole.id,
+  policy: lambdaPolicyDocument,
+});
+
+const serviceAccountKeyString = pulumi.all([serviceAccountKey.privateKey, serviceAccount.email, serviceAccountKey.privateKeyId]).apply(([key, email, keyId]) => {
+
+ 
+  const decodedString = Buffer.from(key, 'base64').toString('utf-8');
+ 
+
+
+  const credentialsString = JSON.stringify(decodedString);
+
+  console.log(`Formatted GCP Service Account Credentials: ${credentialsString}`);
+  return credentialsString;
+});
+
+// Create the Lambda function
+const lambda = new aws.lambda.Function("myLambdaFunction", {
+  runtime: aws.lambda.Runtime.NodeJS14dX,
+  code: lambdaZip,
+  handler: "index.handler",  
+  role: lambdaRole.arn,
+  environment: {
+      variables: {
+        SNS_TOPIC_ARN: snsTopic.arn,
+        GCS_BUCKET_NAME: storageBucket.name,
+        DYNAMODB_TABLE_NAME: dynamoDbTable.name,
+        GCP_SERVICE_ACCOUNT: serviceAccountKeyString,
+        MAILGUN_API_KEY: ConfigMailKey,
+        MAILGUN_DOMAIN: ConfigMailDomain,
+        
+
+      },
+  },
+}, { provider: awsDevProvider }); 
+
+const snsSubscription = new aws.sns.TopicSubscription("snsToLambda", {
+  topic: snsTopic.arn,
+  protocol: "lambda",
+  endpoint: lambda.arn,
+}, { provider: awsDevProvider });
+
+// Lambda permission to allow SNS invocation
+const lambdaPermission = new aws.lambda.Permission("lambdaPermission", {
+  action: "lambda:InvokeFunction",
+  function: lambda.name,
+  principal: "sns.amazonaws.com",
+  sourceArn: snsTopic.arn,
+}, { provider: awsDevProvider });
+
+// Export the name and ARN of the topic
+exports.lambdaFunctionArn = lambda.arn;
+
+db_name = rdsInstance.name
+db_username= rdsInstance.username
+db_password= rdsInstance.password
+sns_arn=  snsTopic.arn;
+
+// Attach an inline policy for SNS publish
+const snsPublishPolicy = new aws.iam.Policy("sns-publish-policy", {
+  name: "sns-publish-policy",
+  description: "Allows publishing to SNS topics",
+  policy: JSON.stringify({
+    Version: "2012-10-17",
+    Statement: [
+      {
+        Effect: "Allow",
+        Action: "sns:Publish",
+        Resource: "*",
+      },
+    ],
+  }),
+});
+
+// Define an IAM role with CloudWatchAgentServerPolicy policy
+const role = new aws.iam.Role("cloudwatch-agent-role", {
+  assumeRolePolicy: JSON.stringify({
+      Version: "2012-10-17",
+      Statement: [{
+          Action: "sts:AssumeRole",
+          Effect: "Allow",
+          Principal: {
+              Service: "ec2.amazonaws.com",
+          },
+      }],
+  }),
+  // Add managed policies for CloudWatch Agent and SNS publishing
+  managedPolicyArns: [
+    "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
+    snsPublishPolicy.arn,
+  ],
+});
+
+
+const policyAttachment = new aws.iam.RolePolicyAttachment("cloudwatch-agent-policy-attachment", {
+  role: role,
+  policyArn: "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
+});
+
+// Attach the sns-publish-policy
+const snsPolicyAttachment = new aws.iam.RolePolicyAttachment("sns-publish-policy-attachment", {
+  role: role,
+  policyArn: snsPublishPolicy.arn,
+});
+
+// Create an Instance Profile for the EC2 instance
+const instanceProfile = new aws.iam.InstanceProfile("cloudwatch-agent-instance-profile", {
+  role: role,
+});
+
+
+
 const userData = pulumi.interpolate`#!/bin/bash
 
 echo "DB_USERNAME=${db_username}" > /opt/csye6225/.env
@@ -361,7 +527,7 @@ echo "DB_PASSWORD=${db_password}" >> /opt/csye6225/.env
 echo "DB_NAME=${db_name}" >> /opt/csye6225/.env
 echo "DB_HOST=${rdwoport}" >> /opt/csye6225/.env
 echo "DATABASE_URL=mysql://${db_username}:${db_password}@${rdwoport}" >> /opt/csye6225/.env
-
+echo "SNS_ARN=${sns_arn}" >> /opt/csye6225/.env
 sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/csye6225/cloudwatchConfig.json -s
 systemctl restart amazon-cloudwatch-agent
 `;
@@ -410,7 +576,7 @@ const autoScalingGroup = new aws.autoscaling.Group("autoScalingGroup", {
   cooldown: 60,
   tags: [{
       key: "Name",
-      value: "MyWebAppInstance",
+      value: "WebAppInstance",
       propagateAtLaunch: true,
   }],
   healthCheckType: "EC2",
