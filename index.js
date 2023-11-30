@@ -236,7 +236,7 @@ new aws.ec2.SecurityGroupRule("outboundToInternet", {
 // Output the IDs of private subnets
 const privateSubnetIds = privateSubnets.apply(subnets => subnets.map(subnet => subnet.id));
 
-const dbSubnetGroup = new aws.rds.SubnetGroup("ownBbsubnetgroup", {
+const dbSubnetGroup = new aws.rds.SubnetGroup("owndbsubnetgroup", {
   subnetIds: [
     privateSubnets[0].id, // Subnet in one AZ
     privateSubnets[1].id, // Subnet in another AZ
@@ -332,20 +332,20 @@ rdwoport = rds_endpoint.apply(endpoint => {
   return modifiedEndpoint.slice(0, -5); 
 });
 
-const storageBucket = new gcp.storage.Bucket("UploadedAssignmentBucket", {
+const storageBucket = new gcp.storage.Bucket("uploadedassignmentbucket", {
   location: "US",
 });
 
-const serviceAccount = new gcp.serviceaccount.Account("GcpServiceAccount", {
+const serviceAccount = new gcp.serviceaccount.Account("gcpserviceaccount", {
   accountId: "gcp-service-account",
   displayName: "GCP Service Account",
 });
 
-const serviceAccountKey = new gcp.serviceaccount.Key("GcpServiceAccountKey", {
+const serviceAccountKey = new gcp.serviceaccount.Key("gcpserviceaccountkey", {
   serviceAccountId: serviceAccount.name,
 });
 
-const storageAdminBinding = new gcp.projects.IAMMember("storageBinding-admin", {
+const storageAdminBinding = new gcp.projects.IAMMember("storage-admin-binding", {
   project: ConfigGcpName ,
   member: pulumi.interpolate`serviceAccount:${serviceAccount.email}`,
   role: "roles/storage.objectAdmin",
@@ -362,15 +362,18 @@ const dynamoDbTable = new aws.dynamodb.Table("emailTrackingTable", {
 // Create an SNS Topic
 const snsTopic = new aws.sns.Topic("serverlessTopic", {
   displayName: "Serverless SNS Topic for Lambda Functions",
-}, { provider: awsDevProvider });
+}, { provider: awsProviderDev });
 
 exports.topicName = snsTopic.name;
 exports.topicArn = snsTopic.arn;
 
 
-// Read in the Lambda zip file
-const lambdaZipPath = '/Users/sruthisivasankar/Desktop/lambda.zip';
+//Read in the Lambda zip file
+const lambdaZipPath = '/Users/sruthisivasankar/Desktop/assignment09/serverless.zip';
 const lambdaZip = new pulumi.asset.FileArchive(lambdaZipPath);
+
+
+
 
 // IAM Role for Lambda Function
 const lambdaRole = new aws.iam.Role("lambdaRole", {
@@ -386,6 +389,8 @@ const lambdaRole = new aws.iam.Role("lambdaRole", {
   }),
 });
 
+
+
 // Attach necessary policies to the role
 const lambdaPolicyDocument = JSON.stringify({
   Version: "2012-10-17",
@@ -399,9 +404,10 @@ const lambdaPolicyDocument = JSON.stringify({
               "secretsmanager:GetSecretValue",
               "logs:CreateLogGroup",
 				      "logs:CreateLogStream",
-				      "logs:PutLogEvents"
+				      "logs:PutLogEvents",
+              "s3:GetObject",
           ],
-          Resource: ""  // Specify resources or use "" for all resources
+          Resource: "*"  
       }
   ]
 });
@@ -414,41 +420,40 @@ const lambdaPolicy = new aws.iam.RolePolicy("lambdaPolicy", {
 const serviceAccountKeyString = pulumi.all([serviceAccountKey.privateKey, serviceAccount.email, serviceAccountKey.privateKeyId]).apply(([key, email, keyId]) => {
 
  
-  const decodedString = Buffer.from(key, 'base64').toString('utf-8');
+  
  
 
 
-  const credentialsString = JSON.stringify(decodedString);
-
-  console.log(`Formatted GCP Service Account Credentials: ${credentialsString}`);
-  return credentialsString;
+  const credentialsString = JSON.stringify(key);
+  const decodedString = Buffer.from(credentialsString, 'base64').toString('utf-8');
+  return decodedString;
 });
 
-// Create the Lambda function
+
+
+
 const lambda = new aws.lambda.Function("myLambdaFunction", {
   runtime: aws.lambda.Runtime.NodeJS14dX,
   code: lambdaZip,
-  handler: "index.handler",  
+  handler: "index.handler",
   role: lambdaRole.arn,
   environment: {
-      variables: {
-        SNS_TOPIC_ARN: snsTopic.arn,
-        GCS_BUCKET_NAME: storageBucket.name,
-        DYNAMODB_TABLE_NAME: dynamoDbTable.name,
-        GCP_SERVICE_ACCOUNT: serviceAccountKeyString,
-        MAILGUN_API_KEY: ConfigMailKey,
-        MAILGUN_DOMAIN: ConfigMailDomain,
-        
-
-      },
+    variables: {
+      SNS_TOPIC_ARN: snsTopic.arn,
+      GCS_BUCKET_NAME: storageBucket.name,
+      DYNAMODB_TABLE_NAME: dynamoDbTable.name,
+      GCP_SERVICE_ACCOUNT: serviceAccountKeyString,
+      MAILGUN_API_KEY: ConfigMailKey,
+      MAILGUN_DOMAIN: ConfigMailDomain,
+    },
   },
-}, { provider: awsDevProvider }); 
+}, { provider: awsProviderDev });
 
 const snsSubscription = new aws.sns.TopicSubscription("snsToLambda", {
   topic: snsTopic.arn,
   protocol: "lambda",
   endpoint: lambda.arn,
-}, { provider: awsDevProvider });
+}, { provider: awsProviderDev });
 
 // Lambda permission to allow SNS invocation
 const lambdaPermission = new aws.lambda.Permission("lambdaPermission", {
@@ -456,7 +461,7 @@ const lambdaPermission = new aws.lambda.Permission("lambdaPermission", {
   function: lambda.name,
   principal: "sns.amazonaws.com",
   sourceArn: snsTopic.arn,
-}, { provider: awsDevProvider });
+}, { provider: awsProviderDev });
 
 // Export the name and ARN of the topic
 exports.lambdaFunctionArn = lambda.arn;
