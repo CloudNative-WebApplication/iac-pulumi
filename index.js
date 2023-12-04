@@ -12,6 +12,7 @@ const ConfigkeyName = new pulumi.Config().require("ConfigkeyNamepair");
 const ConfigGcpName = new pulumi.Config("gcp").require("project");
 const ConfigMailDomain = new pulumi.Config().require("ConfigMailDomain");
 const ConfigMailKey = new pulumi.Config().require("ConfigMailKey");
+const CertificateArn = new pulumi.Config().require("CertificateArn");
  
 // Function to get the most recent AMI
 function getLatestAmi() {
@@ -296,15 +297,17 @@ const targetGroup = new aws.lb.TargetGroup("targetGroup", {
 }, { provider: awsProviderDev });
 
 // Listener
-const listener = new aws.lb.Listener("listener", {
-  loadBalancerArn: webappLoadBalancer.arn,
-  port: 80,
-  protocol: "HTTP",
+const Listener = new aws.lb.Listener("demoListener", {
+  loadBalancerArn: appLoadBalancer.arn,
+  port: 443,
+  protocol: "HTTPS",
+  sslPolicy: "ELBSecurityPolicy-2016-08",
+  certificateArn: CertificateArn,
   defaultActions: [{
       type: "forward",
       targetGroupArn: targetGroup.arn,
   }],
-}, { provider: awsProviderDev });
+}, { provider: awsProvider });
 
 
 
