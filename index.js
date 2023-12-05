@@ -298,7 +298,7 @@ const targetGroup = new aws.lb.TargetGroup("targetGroup", {
 
 // Listener
 const Listener = new aws.lb.Listener("demoListener", {
-  loadBalancerArn: appLoadBalancer.arn,
+  loadBalancerArn: webappLoadBalancer.arn,
   port: 443,
   protocol: "HTTPS",
   sslPolicy: "ELBSecurityPolicy-2016-08",
@@ -307,7 +307,7 @@ const Listener = new aws.lb.Listener("demoListener", {
       type: "forward",
       targetGroupArn: targetGroup.arn,
   }],
-}, { provider: awsProvider });
+}, { provider: awsProviderDev });
 
 
 
