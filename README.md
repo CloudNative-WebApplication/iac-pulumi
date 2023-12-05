@@ -41,3 +41,11 @@ Contributing
 Feel free to contribute to this project or report issues. We appreciate your contributions to make it better.
 
 Replace <Your_AWS_Access_Key>, <Your_AWS_Secret_Key>, <AWS_Region>, and <VPC_CIDR_Block> with your specific AWS and configuration values.
+
+Command to import certificate:
+aws acm import-certificate \
+    --profile demo \
+    --certificate fileb:///Users/sruthisivasankar/Downloads/demo_sruthisivasankar.me/demo_sruthisivasankar_me.crt \
+    --private-key fileb:///Users/sruthisivasankar/Downloads/demo_sruthisivasankar.me/private.key \
+    --certificate-chain fileb:///Users/sruthisivasankar/Downloads/demo_sruthisivasankar.me/demo_sruthisivasankar_me.ca-bundle \
+    --region us-east-1
